@@ -1,5 +1,29 @@
-.venv/
-__pycache__/
-*.pyc
+# Environment / secrets
 .env
+.streamlit/secrets.toml
+
+# Local document index — may contain personal/client data extracted from uploaded PDFs
 rag_index.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

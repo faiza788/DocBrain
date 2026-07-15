@@ -1,28 +1,31 @@
 """
 rag_engine.py
-Core logic for a RAG (Retrieval-Augmented Generation) document Q&A system.
+Local retrieval layer for DocBrain.
 
-Pipeline:
-  1. Extract text from PDFs (pypdf)
-  2. Split text into overlapping chunks
-  3. Embed chunks locally with sentence-transformers (free, no API key, runs on your machine)
-  4. Store embeddings + chunk text in a simple pickle file (acts as our vector store)
-  5. On a question: embed the query, find the most similar chunks (cosine similarity),
-     and feed them as context to Groq (fast, free-tier LLM inference) to generate an answer.
+Handles everything except talking to an LLM: extracting text from PDFs,
+chunking it, embedding chunks locally with sentence-transformers (free, no
+API key, runs on your machine), and cosine-similarity search over a local
+pickle index.
 
-Retrieval (steps 1-4) stays fully local and free. Answer generation (step 5) calls the
-Groq API, which is free for this kind of usage (no credit card needed) — see README.
+The Groq API key is tracked here (so the UI and the agent share one source
+of truth), loaded from a local .env file via python-dotenv, with a fallback
+to a key set manually at runtime (e.g. typed into the Streamlit sidebar).
+It is kept in memory only for this process — never logged, and never written
+anywhere but the user's own .env (which is gitignored). Actual LLM calls
+happen in agent_engine.py, not here.
 """
 
 import os
 import pickle
+
 import numpy as np
+from dotenv import load_dotenv
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
-from groq import Groq
 
-EMBED_MODEL_NAME = "all-MiniLM-L6-v2"        # small (~80MB), fast, good general-purpose embedding model
-GROQ_MODEL_NAME = "llama-3.3-70b-versatile"  # fast + accurate, well within Groq's free tier
+load_dotenv()  # loads GROQ_API_KEY from a local .env file, if present
+
+EMBED_MODEL_NAME = "all-MiniLM-L6-v2"  # small (~80MB), fast, good general-purpose embedding model
 
 CHUNK_SIZE = 800     # characters per chunk
 CHUNK_OVERLAP = 150  # overlap between consecutive chunks so context isn't cut off mid-thought
@@ -37,30 +40,24 @@ class RAGEngine:
         self.sources = []       # list[(filename, chunk_index)]
         self.embeddings = None  # numpy array, shape (n_chunks, embedding_dim)
 
-        # API key resolution order: explicit arg > env var. Can also be set later via
-        # set_api_key(), since Streamlit collects it from the user after the engine exists.
+        # API key resolution order: explicit arg > .env (via python-dotenv, loaded above) >
+        # manually set later via set_api_key(), since Streamlit collects it from the sidebar
+        # after the engine already exists.
         self._api_key = api_key or os.environ.get("GROQ_API_KEY")
-        self._client = None
 
         if os.path.exists(index_path):
             self.load_index()
 
+    @property
+    def api_key(self):
+        return self._api_key
+
     def set_api_key(self, api_key):
         """Update the API key at runtime (e.g. after the user types it into the sidebar)."""
         self._api_key = api_key
-        self._client = None  # force client to be rebuilt with the new key
 
     def has_api_key(self):
         return bool(self._api_key)
-
-    # ---------- Groq client (lazy loaded) ----------
-
-    def _get_client(self):
-        if not self._api_key:
-            raise RuntimeError("No Groq API key set. Add one in the sidebar first.")
-        if self._client is None:
-            self._client = Groq(api_key=self._api_key)
-        return self._client
 
     # ---------- PDF handling ----------
 
@@ -148,30 +145,3 @@ class RAGEngine:
             {"text": self.chunks[i], "source": self.sources[i], "score": float(sims[i])}
             for i in top_idx
         ]
-
-    # ---------- Generation ----------
-
-    def answer_question(self, query, top_k=4):
-        results = self.search(query, top_k=top_k)
-        if not results:
-            return "No documents indexed yet — upload and add a PDF first.", []
-
-        context = "\n\n---\n\n".join(
-            f"[Source: {r['source'][0]}, chunk {r['source'][1]}]\n{r['text']}" for r in results
-        )
-        prompt = (
-            "Answer the question using ONLY the context below. "
-            "If the answer isn't contained in the context, say you don't know — don't make anything up.\n\n"
-            f"Context:\n{context}\n\n"
-            f"Question: {query}"
-        )
-
-        client = self._get_client()
-        response = client.chat.completions.create(
-            model=GROQ_MODEL_NAME,
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        answer = response.choices[0].message.content.strip()
-
-        return answer, results

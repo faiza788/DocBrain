@@ -1,86 +1,144 @@
-# Document Q&A (RAG, powered by Groq — free)
+# 🧠 DocBrain — Agentic Document Q&A
 
-Upload PDFs — contracts, briefs, portfolios, whatever — and ask questions about them.
-Retrieval (finding the relevant parts of your documents) runs locally and free.
-Answer generation uses the Groq API, which is fast and free for this kind of usage —
-no credit card required.
+Upload PDFs and ask questions about them. Answers come from an autonomous LLM
+agent that decides **for itself** when to search your documents, what to
+search for, and whether to refine its query and search again — not from a
+fixed pipeline. Built for an Agentic AI course as a demonstration of
+tool-using, self-directing agents.
 
-## How it works
-1. **Parse** — extracts text from your PDFs (`pypdf`)
-2. **Chunk** — splits the text into overlapping ~800-character pieces
-3. **Embed** — turns each chunk into a vector locally (`sentence-transformers`, model:
-   `all-MiniLM-L6-v2`, ~80MB, downloads once then works offline for this step)
-4. **Store** — saves chunks + vectors to `rag_index.pkl` in this folder (your local "vector database")
-5. **Ask** — when you type a question, it embeds the question, finds the most similar chunks
-   (cosine similarity, no external vector DB needed), and sends them as context to Groq
-   (running Llama 3.3 70B on their custom LPU hardware), which reads them and writes a
-   grounded answer — typically in 1-2 seconds.
+## Why this is "agentic" and not just RAG
+
+A standard RAG app is a fixed pipeline with no decision-making in it:
+
+```
+question -> embed -> search once -> stuff results into a prompt -> generate answer
+```
+
+It always searches exactly once, with the user's raw question, no matter
+whether that search actually found anything useful. If the first search
+misses, the app has no way to notice or recover — it just answers badly.
+
+DocBrain replaces that fixed pipeline with an autonomous agent loop
+(**ReAct-style: Reason → Act → Observe → repeat**), implemented in
+`agent_engine.py` via Groq's tool-calling API:
+
+1. **Reason** — the LLM reads the question and decides whether it needs to
+   search the documents at all, and if so, what query would find the answer.
+2. **Act** — it calls the `search_documents(query)` tool with a query of its
+   own choosing (not necessarily the user's exact wording).
+3. **Observe** — it reads the returned chunks and their relevance scores.
+4. **Repeat or answer** — if the results don't actually answer the question,
+   it can rephrase and search again with a refined query. Once it has enough,
+   it answers directly — grounded only in what it found.
+
+The model itself is making these calls, turn by turn, up to a small safety
+cap (`MAX_STEPS = 4` in `agent_engine.py`). The UI's "Agent's reasoning"
+section shows this whole trace, so you can see exactly what it searched for,
+why, and what it found — which is the difference between "an app that does
+RAG" and "an agent that uses a search tool."
+
+Retrieval and embeddings run **fully locally** (`sentence-transformers`, no
+API key, no external calls). Only the final agent reasoning/answer generation
+calls the Groq API.
+
+## Project structure
+
+| File               | Purpose                                                             |
+|--------------------|----------------------------------------------------------------------|
+| `app.py`           | Streamlit UI — upload PDFs, ask questions, view the agent's trace   |
+| `rag_engine.py`    | `RAGEngine` — PDF parsing, chunking, local embeddings, index, search |
+| `agent_engine.py`  | `DocumentAgent` — the ReAct tool-calling loop around `RAGEngine`     |
+| `requirements.txt` | Python dependencies                                                  |
+| `.env.example`     | Template for your `.env` — copy it, it is *not* your real key       |
 
 ## Setup
 
 ```bash
 # 1. Create a virtual environment (recommended)
-python3 -m venv venv
+python -m venv venv
 source venv/bin/activate      # on Windows: venv\Scripts\activate
 
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Run the app
+# 3. Get a free Groq API key
+#    -> https://console.groq.com/keys  (sign in with email or Google, no credit card)
+
+# 4. Create your .env file from the template, then edit it with your real key
+cp .env.example .env          # on Windows: copy .env.example .env
+```
+
+Open `.env` and replace the placeholder:
+
+```
+GROQ_API_KEY=your-key-here
+```
+
+`.env` is listed in `.gitignore` — it will never be committed. `.env.example`
+has no real key in it and is safe to commit as-is.
+
+## Running it
+
+```bash
 streamlit run app.py
 ```
 
-Your browser will open automatically at `http://localhost:8501`.
-
-## Getting a (free) API key
-
-1. Go to https://console.groq.com/keys and sign in with email or Google — no credit card needed.
-2. Create an API key.
-3. Either:
-   - Paste it into the "Groq API key" box in the app's sidebar each time, **or**
-   - Set it once as an environment variable so you never have to paste it again:
-     ```bash
-     export GROQ_API_KEY="your-key-here"     # macOS/Linux
-     setx GROQ_API_KEY "your-key-here"        # Windows
-     ```
-     Then restart the app — it'll pick the key up automatically.
-
-**Note on limits:** Groq's free tier gives you roughly 30 requests/minute and 14,400
-requests/day, shared across your account — more than enough for personal document Q&A.
-If you ever hit a rate limit, the app will show an error; just wait a minute and try again.
-
-**Note on privacy:** when you ask a question, the relevant document chunks (not the
-whole PDF) are sent to Groq's API to generate the answer. If you're working with highly
-sensitive material and want zero external calls, a fully local/offline version (no API,
-just slower) is still an option — ask and I can bring that back.
+Your browser will open at `http://localhost:8501`. If `GROQ_API_KEY` is set
+in `.env`, the sidebar will show "Loaded from .env" automatically — no key
+entry needed. If it's not set, you can paste a key into the sidebar as a
+fallback; it's kept in memory for that session only and never written to disk.
 
 ## Usage
 
-1. Add your free API key in the sidebar (see above).
-2. Upload one or more PDFs and click "Add to knowledge base."
-3. Type a question in the main box — e.g. *"What's the payment schedule in this contract?"*
-   or *"Summarize the deliverables in the Q3 brief."*
-4. Expand "Sources used to answer this" to see exactly which chunks of which file the
-   answer came from — useful for double-checking it's not making things up.
-5. Use "Clear knowledge base" in the sidebar to wipe everything and start fresh.
+1. Upload one or more PDFs in the sidebar and click **"Add to knowledge base"**.
+   The sidebar shows the indexed files and total chunk count.
+2. Type a question in the main box — e.g. *"What's the payment schedule in
+   this contract?"* or *"Summarize the deliverables across all the uploaded
+   briefs."*
+3. Read the **Answer**.
+4. Expand **"Agent's reasoning"** to see the full trace: each search the
+   agent ran, why it ran it (when the model states a reason), the chunks it
+   got back, and their relevance scores (0–1, higher = more relevant). A
+   question that needed two refined searches will show two steps; a question
+   the agent could answer without searching shows zero.
+5. Use **"Clear knowledge base"** in the sidebar to wipe the local index and
+   start fresh.
 
 ## Customizing
 
-- **Model**: change `GROQ_MODEL_NAME` in `rag_engine.py`. Other good free-tier options:
-  `llama-3.1-8b-instant` (faster, lighter) or `gpt-oss-120b` (strong all-rounder).
-  Full list at https://console.groq.com/docs/models.
-- **Chunk size**: tweak `CHUNK_SIZE` / `CHUNK_OVERLAP` in `rag_engine.py` if answers feel
-  like they're missing context (bigger chunks) or too vague (smaller chunks).
-- **Number of chunks retrieved**: change `top_k` in the `answer_question()` call
-  (default 4) — more chunks means more context but a bigger/slower API call.
+- **Model**: change `AGENT_MODEL_NAME` in `agent_engine.py`. Full list of
+  Groq-hosted models at https://console.groq.com/docs/models.
+- **Search step cap**: change `MAX_STEPS` in `agent_engine.py` if you want
+  the agent to be able to search more (or fewer) times before being forced
+  to answer.
+- **Chunk size**: tweak `CHUNK_SIZE` / `CHUNK_OVERLAP` in `rag_engine.py` if
+  answers feel like they're missing context (bigger chunks) or too vague
+  (smaller chunks).
+- **Chunks per search**: change `TOP_K` in `agent_engine.py` (default 4).
 
 ## Troubleshooting
 
-- **"No Groq API key set"** — add your key in the sidebar, or set the `GROQ_API_KEY`
-  environment variable and restart the app.
-- **Rate limit / 429 errors** — you've hit the free tier's per-minute or per-day cap;
-  wait a bit and try again. This is unlikely under normal personal use.
-- **PDF text comes out empty** — some PDFs are scanned images rather than real text —
-  this tool doesn't do OCR. You'd need to run those through an OCR tool first.
-- **Answers seem to miss something you know is in the PDF** — try increasing `top_k`
-  or `CHUNK_SIZE` in `rag_engine.py`, since the answer may be in a chunk that wasn't retrieved.
+- **"No Groq API key set"** — add `GROQ_API_KEY` to your `.env` file and
+  restart the app, or paste a key into the sidebar.
+- **Sidebar never shows "Loaded from .env"** — make sure the file is named
+  exactly `.env` (not `.env.txt`) and sits in the same folder as `app.py`,
+  and that you restarted `streamlit run app.py` after creating it (env vars
+  are read on startup).
+- **Rate limit / 429 errors** — you've hit Groq's free-tier per-minute or
+  per-day cap; wait a bit and try again.
+- **PDF text comes out empty / "0 chunks added"** — some PDFs are scanned
+  images rather than real text; this tool doesn't do OCR. Run those through
+  an OCR tool first.
+- **Agent's reasoning shows repeated near-identical searches** — this is
+  the model refining its query, not a bug; if it happens excessively, lower
+  `MAX_STEPS` in `agent_engine.py`.
+- **Answers seem to miss something you know is in the PDF** — try increasing
+  `TOP_K` or `CHUNK_SIZE`, or ask a more specific question so the agent's
+  search query lands on the right chunk.
+
+## Privacy note
+
+When the agent searches, the relevant document chunks (not the whole PDF)
+are sent to Groq's API as part of generating the answer. `rag_index.pkl`
+(your local document index) and `.env` (your API key) are both gitignored
+and stay on your machine only.
