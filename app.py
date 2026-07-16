@@ -50,31 +50,7 @@ engine = get_engine()
 agent = get_agent(engine)
 
 with st.sidebar:
-    st.header("🔑 Groq API key")
-
-    if engine.has_api_key() and not st.session_state.get("manual_api_key_set"):
-        st.success("Loaded from .env")
-    elif engine.has_api_key():
-        st.success("Using key entered below")
-    else:
-        st.warning("No API key found. Add GROQ_API_KEY to a .env file, or paste one below.")
-
-    api_key_input = st.text_input(
-        "Override with a different key (optional)",
-        type="password",
-        value="",
-        help=(
-            "The key is loaded automatically from a local .env file (GROQ_API_KEY). "
-            "Paste one here only to override it for this session — kept in memory only, "
-            "never logged or written to disk. Get a free key at console.groq.com/keys."
-        ),
-    )
-    if api_key_input:
-        engine.set_api_key(api_key_input)
-        st.session_state["manual_api_key_set"] = True
-
-    st.divider()
-    st.header("📁 Knowledge base")
+    st.header(" Knowledge base")
 
     uploaded_files = st.file_uploader(
         "Upload PDF(s)", type=["pdf"], accept_multiple_files=True
@@ -119,8 +95,6 @@ query = st.text_input(
 if query:
     if len(engine.chunks) == 0:
         st.warning("Upload and add at least one PDF first (sidebar, left).")
-    elif not engine.has_api_key():
-        st.warning("Add your Groq API key first (.env file, or the sidebar).")
     else:
         with st.spinner("Agent is researching..."):
             try:

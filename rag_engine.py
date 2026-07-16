@@ -27,8 +27,8 @@ load_dotenv()  # loads GROQ_API_KEY from a local .env file, if present
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"  # small (~80MB), fast, good general-purpose embedding model
 
-CHUNK_SIZE = 800     # characters per chunk
-CHUNK_OVERLAP = 150  # overlap between consecutive chunks so context isn't cut off mid-thought
+CHUNK_SIZE = 2200    # characters per chunk
+CHUNK_OVERLAP = 450  # overlap between consecutive chunks so context isn't cut off mid-thought
 
 
 class RAGEngine:
