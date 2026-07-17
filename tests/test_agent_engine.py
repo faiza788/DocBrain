@@ -81,3 +81,18 @@ def test_comprehensive_questions_use_all_indexed_chunks(monkeypatch):
     prompt = fake_client.chat.completions.last_kwargs["messages"][1]["content"]
     assert "Module 1 details" in prompt
     assert "Module 2 details" in prompt
+
+
+def test_comprehensive_questions_limit_context_passages(monkeypatch):
+    fake_rag = FakeRAG()
+    fake_rag.chunks = [f"module {i} details" for i in range(20)]
+    fake_rag.sources = [("doc.pdf", i) for i in range(20)]
+    agent = DocumentAgent(fake_rag, top_k=2)
+
+    fake_client = FakeGroq("fake-key")
+    monkeypatch.setattr("agent_engine.Groq", lambda api_key: fake_client)
+
+    agent.answer_question("Give me all pages and all modules")
+
+    prompt = fake_client.chat.completions.last_kwargs["messages"][1]["content"]
+    assert prompt.count("[Source:") <= 10

@@ -17,6 +17,7 @@ happen in agent_engine.py, not here.
 
 import os
 import pickle
+import re
 
 import numpy as np
 from dotenv import load_dotenv
@@ -27,8 +28,8 @@ load_dotenv()  # loads GROQ_API_KEY from a local .env file, if present
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"  # small (~80MB), fast, good general-purpose embedding model
 
-CHUNK_SIZE = 2200    # characters per chunk
-CHUNK_OVERLAP = 450  # overlap between consecutive chunks so context isn't cut off mid-thought
+CHUNK_SIZE = 1800    # characters per chunk
+CHUNK_OVERLAP = 300  # overlap between consecutive chunks so context isn't cut off mid-thought
 
 
 class RAGEngine:
@@ -71,15 +72,52 @@ class RAGEngine:
         return "\n".join(text_parts)
 
     @staticmethod
+    def _split_by_sections(text):
+        sections = []
+        pattern = re.compile(r"\n\s*(?:Module|Chapter|Section|Part)\s*[0-9A-Za-z.-]+(?:\s*[:\-]|\s+)", re.IGNORECASE)
+        matches = list(pattern.finditer(text))
+        if not matches:
+            return []
+
+        for i, match in enumerate(matches):
+            start = match.start()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            section_text = text[start:end].strip()
+            if section_text:
+                sections.append(section_text)
+        return sections
+
+    @staticmethod
     def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
         text = " ".join(text.split())  # collapse whitespace/newlines
         if not text:
             return []
+
+        section_chunks = RAGEngine._split_by_sections(text)
+        if section_chunks:
+            chunks = []
+            for section in section_chunks:
+                if len(section) <= chunk_size:
+                    chunks.append(section)
+                    continue
+                start = 0
+                while start < len(section):
+                    end = min(start + chunk_size, len(section))
+                    chunk = section[start:end].strip()
+                    if chunk:
+                        chunks.append(chunk)
+                    if end >= len(section):
+                        break
+                    start += chunk_size - overlap
+            return [c.strip() for c in chunks if c.strip()]
+
         chunks = []
         start = 0
         while start < len(text):
-            end = start + chunk_size
+            end = min(start + chunk_size, len(text))
             chunks.append(text[start:end])
+            if end >= len(text):
+                break
             start += chunk_size - overlap
         return [c.strip() for c in chunks if c.strip()]
 
@@ -128,7 +166,7 @@ class RAGEngine:
     # ---------- Retrieval ----------
 
     def search(self, query, top_k=4):
-        """Return the top_k most relevant chunks for a query, using cosine similarity."""
+        """Return the top_k most relevant chunks for a query, using cosine similarity plus keyword overlap."""
         if self.embeddings is None or len(self.chunks) == 0:
             return []
 
@@ -139,9 +177,17 @@ class RAGEngine:
         denom[denom == 0] = 1e-10
 
         sims = (self.embeddings @ query_emb) / denom
-        top_idx = np.argsort(sims)[::-1][:top_k]
+        query_terms = set(re.findall(r"[a-zA-Z0-9]+", query.lower()))
+        keyword_boosts = []
+        for chunk in self.chunks:
+            text = chunk.lower()
+            overlap = sum(1 for term in query_terms if term and term in text)
+            keyword_boosts.append(overlap)
+        keyword_boosts = np.array(keyword_boosts, dtype=float)
+        combined_scores = sims + (keyword_boosts * 0.05)
+        top_idx = np.argsort(combined_scores)[::-1][:top_k]
 
         return [
-            {"text": self.chunks[i], "source": self.sources[i], "score": float(sims[i])}
+            {"text": self.chunks[i], "source": self.sources[i], "score": float(combined_scores[i])}
             for i in top_idx
         ]

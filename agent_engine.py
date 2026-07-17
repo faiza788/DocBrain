@@ -22,7 +22,9 @@ from groq import Groq
 AGENT_MODEL_NAME = "llama-3.1-8b-instant"
 MAX_STEPS = 4     # safety cap on how many search turns the agent gets
 TOP_K = 24        # chunks returned per search to capture more of a long document
-MAX_CONTEXT_CHARS = 24000
+MAX_CONTEXT_CHARS = 16000
+MAX_CONTEXT_PASSAGES = 10
+MAX_PASSAGE_CHARS = 1800
 
 SEARCH_TOOL = {
     "type": "function",
@@ -158,14 +160,20 @@ class DocumentAgent:
 
         merged_results.sort(key=lambda item: item["score"], reverse=True)
         if self._is_comprehensive_question(question):
-            merged_results = merged_results[: max(len(merged_results), self.top_k * 3)]
+            merged_results = merged_results[: max(len(merged_results), MAX_CONTEXT_PASSAGES)]
         else:
-            merged_results = merged_results[: max(self.top_k * 2, 24)]
+            merged_results = merged_results[: max(self.top_k, MAX_CONTEXT_PASSAGES)]
 
-        context = "\n\n---\n\n".join(
-            f"[Source: {r['source'][0]}, chunk {r['source'][1]}]\n{r['text']}"
-            for r in merged_results
-        )
+        context_parts = []
+        for result in merged_results:
+            text = result.get("text", "") or ""
+            if len(text) > MAX_PASSAGE_CHARS:
+                text = text[:MAX_PASSAGE_CHARS] + "..."
+            context_parts.append(
+                f"[Source: {result['source'][0]}, chunk {result['source'][1]}]\n{text}"
+            )
+
+        context = "\n\n---\n\n".join(context_parts[:MAX_CONTEXT_PASSAGES])
         if len(context) > MAX_CONTEXT_CHARS:
             context = context[:MAX_CONTEXT_CHARS] + "\n..."
 
@@ -175,13 +183,24 @@ class DocumentAgent:
             f"Please cover as many distinct relevant modules, points, or details as the passages contain. "
             f"Do not stop after only a few items when the passages clearly include more. "
             f"If the passages do not contain enough information, say so clearly instead of guessing.\n\n"
+            f"Return your answer in this structure when possible:\n"
+            f"- Module/section:\n"
+            f"- Page or source:\n"
+            f"- Summary:\n"
+            f"- Key details:\n\n"
             f"Document excerpts:\n{context or 'No relevant excerpts found.'}\n\n"
             f"Question: {question}"
         )
 
-        final_response = client.chat.completions.create(
-            model=AGENT_MODEL_NAME,
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-            max_tokens=800,
-        )
+        try:
+            final_response = client.chat.completions.create(
+                model=AGENT_MODEL_NAME,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+                max_tokens=600,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "The document context is too large for the current model settings. Please ask a narrower question or upload fewer pages."
+            ) from exc
+
         return (final_response.choices[0].message.content or "").strip(), trace

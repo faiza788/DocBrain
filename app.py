@@ -87,10 +87,15 @@ with st.sidebar:
 
 st.divider()
 
-query = st.text_input(
-    "Ask a question about your documents:",
-    placeholder="e.g. What's the payment schedule in the contract?",
-)
+col1, col2 = st.columns([2, 1])
+with col1:
+    query = st.text_input(
+        "Ask a question about your documents:",
+        placeholder="e.g. What's the payment schedule in the contract?",
+    )
+with col2:
+    if st.button("🧩 Module summary", use_container_width=True):
+        query = "Give me a structured summary of all modules and their key details from the document."
 
 if query:
     if len(engine.chunks) == 0:
